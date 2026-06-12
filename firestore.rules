@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Functions
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'role', 'createdAt']) &&
+             data.email is string && data.email.size() <= 256 &&
+             data.role in ['admin', 'agent', 'customer'] &&
+             data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+    
+    match /admins/{userId} {
+      // Admins are created natively in Firebase console or super user script
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /properties/{propertyId} {
+      allow read: if true; // Public listings
+      allow create: if isSignedIn() && incoming().agentId == request.auth.uid;
+      allow update: if (isSignedIn() && existing().agentId == request.auth.uid) || isAdmin();
+      allow delete: if (isSignedIn() && existing().agentId == request.auth.uid) || isAdmin();
+    }
+
+    match /inquiries/{inquiryId} {
+      allow read: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}
